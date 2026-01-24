@@ -580,10 +580,22 @@
                 state.positionValid = msg.position_valid === 1;
                 state.targetNum = msg.target_num || 0;
 
-                if (state.positionValid && msg.x !== undefined) {
+                // Use x,y,z if available and valid
+                if (state.positionValid && msg.x !== undefined && msg.x !== 0) {
                     state.position.x = msg.x;
                     state.position.y = msg.y;
                     state.position.z = msg.z;
+                } else if (state.distance > 0) {
+                    // Calculate position from angle_x, angle_y, and distance
+                    // angle_x: angular offset from center of image in X axis (right positive)
+                    // angle_y: angular offset from center of image in Y axis (down positive)
+                    // These angles are in camera frame, which for a downward-facing camera:
+                    //   angle_x positive = target is to the right = body +Y
+                    //   angle_y positive = target is forward = body +X
+                    // Position is target relative to vehicle in Body FRD
+                    state.position.x = state.distance * Math.tan(state.angleY);  // Forward
+                    state.position.y = state.distance * Math.tan(state.angleX);  // Right
+                    state.position.z = state.distance;  // Down (distance to target)
                 }
 
                 lastUpdate = Date.now();

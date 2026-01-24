@@ -204,6 +204,11 @@ udpClient.on('message', (data, rinfo) => {
     const messages = mavlinkParser.parse(data);
 
     for (const msg of messages) {
+        // Log LANDING_TARGET messages for debugging
+        if (msg._id === 149) {
+            console.log(`LANDING_TARGET: dist=${msg.distance?.toFixed(2)}, angle_x=${msg.angle_x?.toFixed(3)}, angle_y=${msg.angle_y?.toFixed(3)}, x=${msg.x?.toFixed(2)}, y=${msg.y?.toFixed(2)}, z=${msg.z?.toFixed(2)}, valid=${msg.position_valid}`);
+        }
+
         // Broadcast to all WebSocket clients
         wss.clients.forEach(client => {
             if (client.readyState === WebSocket.OPEN) {
