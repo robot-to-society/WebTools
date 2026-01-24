@@ -450,36 +450,56 @@
             scene.add(offsetLine);
         }
 
-        function convertBodyFRDToThreeJS(x, y, z) {
-            // Body FRD (Forward-Right-Down) to Three.js (Right-Up-Towards camera)
-            // Body X (forward) -> Three.js -Z (into screen)
-            // Body Y (right)   -> Three.js X (right)
-            // Body Z (down)    -> Three.js -Y (down, but Three.js Y is up)
-            return { x: y, y: -z, z: -x };
+        function convertNEDToThreeJS(n, e, d) {
+            // NED (North-East-Down) to Three.js (Right-Up-Towards camera)
+            // North (+X in NED) -> -Z in Three.js (into screen, tag arrow points this way)
+            // East (+Y in NED)  -> +X in Three.js (right)
+            // Down (+Z in NED)  -> -Y in Three.js (down)
+            return { x: e, y: -d, z: -n };
+        }
+
+        function bodyFRDToNED(bodyX, bodyY, bodyZ, yaw) {
+            // Convert Body FRD position to NED using yaw angle
+            // Body X (forward) rotates to NED based on yaw
+            // Body Y (right) rotates to NED based on yaw
+            // Body Z (down) = NED Z (down)
+            const cosYaw = Math.cos(yaw);
+            const sinYaw = Math.sin(yaw);
+
+            const north = bodyX * cosYaw - bodyY * sinYaw;
+            const east = bodyX * sinYaw + bodyY * cosYaw;
+            const down = bodyZ;
+
+            return { n: north, e: east, d: down };
         }
 
         function updateVehicle() {
             if (!vehicle) return;
 
-            // Position: LANDING_TARGET x,y,z is in Body FRD frame
-            // This represents the target position relative to the vehicle
-            // We want to show vehicle position relative to the target, so negate
-            const pos = convertBodyFRDToThreeJS(
+            // Position: LANDING_TARGET x,y,z is target position relative to vehicle in Body FRD
+            // We need vehicle position relative to target, so negate
+            // Then convert from Body FRD to NED using current yaw
+            const nedPos = bodyFRDToNED(
                 -state.position.x,
                 -state.position.y,
-                -state.position.z
+                -state.position.z,
+                state.attitude.yaw
             );
+
+            const pos = convertNEDToThreeJS(nedPos.n, nedPos.e, nedPos.d);
             vehicle.position.set(pos.x, pos.y, pos.z);
 
-            // Rotation: Convert from aerospace (roll-pitch-yaw around X-Y-Z body axes)
-            // to Three.js rotation. The vehicle model has its nose pointing -Z.
-            // Roll: rotation around body X (forward) -> Three.js -Z axis
-            // Pitch: rotation around body Y (right) -> Three.js X axis
-            // Yaw: rotation around body Z (down) -> Three.js -Y axis
+            // Rotation: ATTITUDE gives roll, pitch, yaw in NED frame
+            // Three.js vehicle model: nose points -Z, up is +Y, right is +X
+            // NED: roll around North (X), pitch around East (Y), yaw around Down (Z)
+            // Mapping to Three.js:
+            //   Roll (around NED X/North) -> around Three.js -Z
+            //   Pitch (around NED Y/East) -> around Three.js X
+            //   Yaw (around NED Z/Down) -> around Three.js -Y
             vehicle.rotation.set(
-                -state.attitude.pitch,  // Pitch around X
-                state.attitude.yaw,     // Yaw around Y (negated because Y is up in Three.js)
-                state.attitude.roll,    // Roll around Z
+                state.attitude.pitch,   // Pitch around Three.js X (= NED East)
+                -state.attitude.yaw,    // Yaw around Three.js Y (= -NED Down)
+                -state.attitude.roll,   // Roll around Three.js Z (= -NED North)
                 'YXZ'
             );
 
