@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Landing Target 3D</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #1a1a2e;
+            color: white;
+            overflow: hidden;
+        }
+
+        #container {
+            width: 100vw;
+            height: 100vh;
+            position: relative;
+        }
+
+        #canvas-container {
+            width: 100%;
+            height: 100%;
+        }
+
+        #status-overlay {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 15px;
+            border-radius: 8px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 14px;
+            line-height: 1.6;
+            min-width: 200px;
+            border: 1px solid #333;
+        }
+
+        #status-overlay .title {
+            font-size: 16px;
+            font-weight: bold;
+            margin-bottom: 10px;
+            color: #4a90d9;
+            border-bottom: 1px solid #333;
+            padding-bottom: 5px;
+        }
+
+        #status-overlay .row {
+            display: flex;
+            justify-content: space-between;
+        }
+
+        #status-overlay .label {
+            color: #888;
+        }
+
+        #status-overlay .value {
+            color: #fff;
+            font-weight: bold;
+        }
+
+        #status-overlay .status-line {
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid #333;
+            text-align: center;
+        }
+
+        #validity-indicator {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 10px 15px;
+            border-radius: 8px;
+            border: 1px solid #333;
+        }
+
+        #validity-dot {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #ff4444;
+            border: 2px solid white;
+            box-shadow: 0 0 10px currentColor;
+        }
+
+        #validity-dot.valid {
+            background: #44ff44;
+        }
+
+        #connection-status {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 10px 15px;
+            border-radius: 8px;
+            font-size: 12px;
+            border: 1px solid #333;
+        }
+
+        #connection-status.connected {
+            border-color: #44ff44;
+        }
+
+        #connection-status.disconnected {
+            border-color: #ff4444;
+        }
+
+        #controls {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 15px;
+            border-radius: 8px;
+            font-size: 12px;
+            border: 1px solid #333;
+        }
+
+        #controls label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+            cursor: pointer;
+        }
+
+        #controls input[type="checkbox"] {
+            width: 16px;
+            height: 16px;
+        }
+
+        #controls input[type="number"] {
+            width: 60px;
+            padding: 4px;
+            border: 1px solid #444;
+            border-radius: 4px;
+            background: #222;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <div id="canvas-container"></div>
+
+        <div id="status-overlay">
+            <div class="title">Landing Target</div>
+            <div class="row"><span class="label">Distance:</span><span class="value" id="val-distance">--</span></div>
+            <div class="row"><span class="label">X:</span><span class="value" id="val-x">--</span></div>
+            <div class="row"><span class="label">Y:</span><span class="value" id="val-y">--</span></div>
+            <div class="row"><span class="label">Z:</span><span class="value" id="val-z">--</span></div>
+            <div class="row"><span class="label">Angle X:</span><span class="value" id="val-angle-x">--</span></div>
+            <div class="row"><span class="label">Angle Y:</span><span class="value" id="val-angle-y">--</span></div>
+            <div class="row"><span class="label">Target #:</span><span class="value" id="val-target">--</span></div>
+            <div class="status-line" id="data-status">NO DATA</div>
+        </div>
+
+        <div id="validity-indicator">
+            <span>Position Valid</span>
+            <div id="validity-dot"></div>
+        </div>
+
+        <div id="connection-status" class="disconnected">
+            WebSocket: Disconnected
+        </div>
+
+        <div id="controls">
+            <label>
+                <input type="checkbox" id="show-grid" checked>
+                Show Grid
+            </label>
+            <label>
+                <input type="checkbox" id="show-trail" checked>
+                Show Trail
+            </label>
+            <label>
+                Trail Length:
+                <input type="number" id="trail-length" value="50" min="10" max="500">
+            </label>
+            <label>
+                Target Size (m):
+                <input type="number" id="target-size" value="0.5" min="0.1" max="2" step="0.1">
+            </label>
+        </div>
+    </div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        // State
+        let scene, camera, renderer, controls;
+        let landingTarget, vehicle, grid, altitudeLine, trail;
+        let trailPoints = [];
+        let lastUpdate = 0;
+        let ws = null;
+
+        const state = {
+            attitude: { roll: 0, pitch: 0, yaw: 0 },
+            position: { x: 0, y: 0, z: 0 },
+            positionValid: false,
+            distance: 0,
+            angleX: 0,
+            angleY: 0,
+            targetNum: 0
+        };
+
+        const options = {
+            showGrid: true,
+            showTrail: true,
+            trailLength: 50,
+            targetSize: 0.5
+        };
+
+        // Initialize
+        function init() {
+            const container = document.getElementById('canvas-container');
+
+            // Scene
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x1a1a2e);
+
+            // Camera
+            const aspect = container.clientWidth / container.clientHeight;
+            camera = new THREE.PerspectiveCamera(60, aspect, 0.1, 1000);
+            camera.position.set(5, 4, 5);
+            camera.lookAt(0, 0, 0);
+
+            // Renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(container.clientWidth, container.clientHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            container.appendChild(renderer.domElement);
+
+            // Controls
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.minDistance = 1;
+            controls.maxDistance = 50;
+
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(5, 10, 5);
+            scene.add(directionalLight);
+
+            // Create objects
+            createLandingTarget();
+            createVehicle();
+            createGrid();
+            createAltitudeLine();
+            createTrail();
+
+            // Event listeners
+            window.addEventListener('resize', onResize);
+            setupControls();
+
+            // Connect WebSocket
+            connectWebSocket();
+
+            // Start animation
+            animate();
+        }
+
+        function createLandingTarget() {
+            const size = options.targetSize;
+            const group = new THREE.Group();
+
+            // White background
+            const bgGeometry = new THREE.PlaneGeometry(size, size);
+            const bgMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+            const bg = new THREE.Mesh(bgGeometry, bgMaterial);
+            bg.rotation.x = -Math.PI / 2;
+            group.add(bg);
+
+            // Black border
+            const borderWidth = size * 0.08;
+            const borderMaterial = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide });
+
+            const borders = [
+                { pos: [0, 0.001, -size/2 + borderWidth/2], size: [size, borderWidth] },
+                { pos: [0, 0.001, size/2 - borderWidth/2], size: [size, borderWidth] },
+                { pos: [-size/2 + borderWidth/2, 0.001, 0], size: [borderWidth, size] },
+                { pos: [size/2 - borderWidth/2, 0.001, 0], size: [borderWidth, size] }
+            ];
+
+            for (const b of borders) {
+                const border = new THREE.Mesh(new THREE.PlaneGeometry(b.size[0], b.size[1]), borderMaterial);
+                border.rotation.x = -Math.PI / 2;
+                border.position.set(...b.pos);
+                group.add(border);
+            }
+
+            // Red cross
+            const crossSize = size * 0.4;
+            const crossWidth = size * 0.06;
+            const crossMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000, side: THREE.DoubleSide });
+
+            const crossH = new THREE.Mesh(new THREE.PlaneGeometry(crossSize, crossWidth), crossMaterial);
+            crossH.rotation.x = -Math.PI / 2;
+            crossH.position.y = 0.002;
+            group.add(crossH);
+
+            const crossV = new THREE.Mesh(new THREE.PlaneGeometry(crossWidth, crossSize), crossMaterial);
+            crossV.rotation.x = -Math.PI / 2;
+            crossV.position.y = 0.002;
+            group.add(crossV);
+
+            landingTarget = group;
+            scene.add(landingTarget);
+        }
+
+        function createVehicle() {
+            const group = new THREE.Group();
+
+            // Main body
+            const bodyGeometry = new THREE.BoxGeometry(0.2, 0.08, 0.2);
+            const bodyMaterial = new THREE.MeshPhongMaterial({ color: 0x4a90d9 });
+            const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+            group.add(body);
+
+            // Arms and motors
+            const armLength = 0.25;
+            const armGeometry = new THREE.CylinderGeometry(0.015, 0.015, armLength, 8);
+            const armMaterial = new THREE.MeshPhongMaterial({ color: 0x333333 });
+            const motorGeometry = new THREE.CylinderGeometry(0.03, 0.03, 0.02, 16);
+            const motorMaterial = new THREE.MeshPhongMaterial({ color: 0x666666 });
+
+            const armAngles = [Math.PI/4, 3*Math.PI/4, 5*Math.PI/4, 7*Math.PI/4];
+            for (const angle of armAngles) {
+                const arm = new THREE.Mesh(armGeometry, armMaterial);
+                arm.rotation.z = Math.PI / 2;
+                arm.position.x = Math.cos(angle) * armLength / 2;
+                arm.position.z = Math.sin(angle) * armLength / 2;
+                group.add(arm);
+
+                const motor = new THREE.Mesh(motorGeometry, motorMaterial);
+                motor.position.x = Math.cos(angle) * armLength;
+                motor.position.z = Math.sin(angle) * armLength;
+                motor.position.y = 0.01;
+                group.add(motor);
+            }
+
+            // Front indicator
+            const arrowGeometry = new THREE.ConeGeometry(0.03, 0.08, 8);
+            const arrowMaterial = new THREE.MeshPhongMaterial({ color: 0xff4444 });
+            const arrow = new THREE.Mesh(arrowGeometry, arrowMaterial);
+            arrow.rotation.x = -Math.PI / 2;
+            arrow.position.z = -0.15;
+            arrow.position.y = 0.02;
+            group.add(arrow);
+
+            vehicle = group;
+            scene.add(vehicle);
+        }
+
+        function createGrid() {
+            grid = new THREE.GridHelper(10, 20, 0x444444, 0x333333);
+            grid.visible = options.showGrid;
+            scene.add(grid);
+        }
+
+        function createAltitudeLine() {
+            const material = new THREE.LineDashedMaterial({
+                color: 0x00ff00,
+                dashSize: 0.1,
+                gapSize: 0.05
+            });
+
+            const points = [new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 1, 0)];
+            const geometry = new THREE.BufferGeometry().setFromPoints(points);
+            altitudeLine = new THREE.Line(geometry, material);
+            altitudeLine.computeLineDistances();
+            scene.add(altitudeLine);
+        }
+
+        function createTrail() {
+            const material = new THREE.LineBasicMaterial({
+                color: 0xffff00,
+                transparent: true,
+                opacity: 0.6
+            });
+            const geometry = new THREE.BufferGeometry();
+            trail = new THREE.Line(geometry, material);
+            trail.visible = options.showTrail;
+            scene.add(trail);
+        }
+
+        function convertNEDToThreeJS(x, y, z) {
+            // NED to Three.js: X->-Z, Y->X, Z->-Y
+            return { x: y, y: -z, z: -x };
+        }
+
+        function updateVehicle() {
+            if (!vehicle) return;
+
+            // Position
+            const pos = convertNEDToThreeJS(state.position.x, state.position.y, state.position.z);
+            vehicle.position.set(pos.x, pos.y, pos.z);
+
+            // Rotation
+            vehicle.rotation.set(
+                state.attitude.pitch,
+                -state.attitude.yaw,
+                -state.attitude.roll,
+                'YXZ'
+            );
+
+            // Altitude line
+            if (altitudeLine) {
+                const points = [
+                    new THREE.Vector3(pos.x, 0, pos.z),
+                    new THREE.Vector3(pos.x, pos.y, pos.z)
+                ];
+                altitudeLine.geometry.setFromPoints(points);
+                altitudeLine.computeLineDistances();
+            }
+
+            // Trail
+            if (options.showTrail && trail) {
+                trailPoints.push(new THREE.Vector3(pos.x, pos.y, pos.z));
+                while (trailPoints.length > options.trailLength) {
+                    trailPoints.shift();
+                }
+                if (trailPoints.length > 1) {
+                    trail.geometry.setFromPoints(trailPoints);
+                }
+            }
+        }
+
+        function updateUI() {
+            const timeSinceUpdate = (Date.now() - lastUpdate) / 1000;
+            const isStale = timeSinceUpdate > 2;
+
+            document.getElementById('val-distance').textContent = state.distance.toFixed(2) + ' m';
+            document.getElementById('val-x').textContent = state.position.x.toFixed(2) + ' m';
+            document.getElementById('val-y').textContent = state.position.y.toFixed(2) + ' m';
+            document.getElementById('val-z').textContent = state.position.z.toFixed(2) + ' m';
+            document.getElementById('val-angle-x').textContent = (state.angleX * 180 / Math.PI).toFixed(1) + '\u00B0';
+            document.getElementById('val-angle-y').textContent = (state.angleY * 180 / Math.PI).toFixed(1) + '\u00B0';
+            document.getElementById('val-target').textContent = state.targetNum;
+
+            const statusEl = document.getElementById('data-status');
+            statusEl.textContent = isStale ? 'STALE' : 'LIVE';
+            statusEl.style.color = isStale ? '#ff4444' : '#44ff44';
+
+            const validityDot = document.getElementById('validity-dot');
+            validityDot.classList.toggle('valid', state.positionValid && !isStale);
+        }
+
+        function connectWebSocket() {
+            const statusEl = document.getElementById('connection-status');
+
+            ws = new WebSocket(`ws://${location.host}`);
+
+            ws.onopen = () => {
+                console.log('WebSocket connected');
+                statusEl.textContent = 'WebSocket: Connected';
+                statusEl.className = 'connected';
+            };
+
+            ws.onclose = () => {
+                console.log('WebSocket disconnected');
+                statusEl.textContent = 'WebSocket: Disconnected';
+                statusEl.className = 'disconnected';
+                setTimeout(connectWebSocket, 2000);
+            };
+
+            ws.onerror = (err) => {
+                console.error('WebSocket error:', err);
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const msg = JSON.parse(event.data);
+                    handleMessage(msg);
+                } catch (e) {
+                    console.error('Failed to parse message:', e);
+                }
+            };
+        }
+
+        function handleMessage(msg) {
+            if (msg._id === 149) {
+                // LANDING_TARGET
+                state.distance = msg.distance || 0;
+                state.angleX = msg.angle_x || 0;
+                state.angleY = msg.angle_y || 0;
+                state.positionValid = msg.position_valid === 1;
+                state.targetNum = msg.target_num || 0;
+
+                if (state.positionValid && msg.x !== undefined) {
+                    state.position.x = msg.x;
+                    state.position.y = msg.y;
+                    state.position.z = msg.z;
+                }
+
+                lastUpdate = Date.now();
+                updateVehicle();
+            } else if (msg._id === 30) {
+                // ATTITUDE
+                state.attitude.roll = msg.roll || 0;
+                state.attitude.pitch = msg.pitch || 0;
+                state.attitude.yaw = msg.yaw || 0;
+            }
+        }
+
+        function setupControls() {
+            document.getElementById('show-grid').addEventListener('change', (e) => {
+                options.showGrid = e.target.checked;
+                if (grid) grid.visible = options.showGrid;
+            });
+
+            document.getElementById('show-trail').addEventListener('change', (e) => {
+                options.showTrail = e.target.checked;
+                if (trail) trail.visible = options.showTrail;
+            });
+
+            document.getElementById('trail-length').addEventListener('change', (e) => {
+                options.trailLength = parseInt(e.target.value) || 50;
+            });
+
+            document.getElementById('target-size').addEventListener('change', (e) => {
+                options.targetSize = parseFloat(e.target.value) || 0.5;
+                if (landingTarget) {
+                    scene.remove(landingTarget);
+                    createLandingTarget();
+                }
+            });
+        }
+
+        function onResize() {
+            const container = document.getElementById('canvas-container');
+            camera.aspect = container.clientWidth / container.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(container.clientWidth, container.clientHeight);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+            updateUI();
+        }
+
+        // Start
+        init();
+    </script>
+</body>
+</html>
