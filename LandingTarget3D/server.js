@@ -10,7 +10,7 @@ const WebSocket = require('ws');
 // Configuration
 const CONFIG = {
     MAVLINK_HOST: process.argv[2] || '172.20.10.4',
-    MAVLINK_PORT: parseInt(process.argv[3]) || 14560,
+    MAVLINK_PORT: parseInt(process.argv[3]) || 14570,
     HTTP_PORT: parseInt(process.argv[4]) || 8080,
     LOCAL_PORT: 14561  // Local port to bind for receiving
 };
