@@ -165,6 +165,7 @@
             <div class="row"><span class="label">Angle X:</span><span class="value" id="val-angle-x">--</span></div>
             <div class="row"><span class="label">Angle Y:</span><span class="value" id="val-angle-y">--</span></div>
             <div class="row"><span class="label">H Offset:</span><span class="value" id="val-hoffset">--</span></div>
+            <div class="row"><span class="label">Tag Yaw:</span><span class="value" id="val-tag-yaw">--</span></div>
             <div class="row"><span class="label">Target #:</span><span class="value" id="val-target">--</span></div>
             <div class="status-line" id="data-status">NO DATA</div>
         </div>
@@ -225,7 +226,8 @@
             distance: 0,
             angleX: 0,
             angleY: 0,
-            targetNum: 0
+            targetNum: 0,
+            targetQuaternion: null  // [w, x, y, z] from LANDING_TARGET
         };
 
         const options = {
@@ -534,6 +536,27 @@
             }
         }
 
+        function updateLandingTargetOrientation() {
+            if (!landingTarget || !state.targetQuaternion) return;
+
+            // LANDING_TARGET quaternion is [w, x, y, z] in NED frame
+            // Three.js Quaternion constructor is (x, y, z, w)
+            const q = state.targetQuaternion;
+
+            // Convert NED quaternion to Three.js
+            // NED: X=North, Y=East, Z=Down
+            // Three.js: X=Right(East), Y=Up(-Down), Z=-North
+            // This requires axis remapping: NED(x,y,z) -> Three.js(y,-z,-x)
+            const threeQuat = new THREE.Quaternion(
+                q[2],   // NED Y (East) -> Three.js X
+                -q[3],  // NED Z (Down) -> Three.js -Y (Up)
+                -q[1],  // NED X (North) -> Three.js -Z
+                q[0]    // W stays the same
+            );
+
+            landingTarget.quaternion.copy(threeQuat);
+        }
+
         function updateUI() {
             const timeSinceUpdate = (Date.now() - lastUpdate) / 1000;
             const isStale = timeSinceUpdate > 2;
@@ -548,6 +571,16 @@
             // Horizontal offset (distance from vehicle ground projection to target center)
             const hOffset = Math.sqrt(state.position.x * state.position.x + state.position.y * state.position.y);
             document.getElementById('val-hoffset').textContent = hOffset.toFixed(2) + ' m';
+
+            // Target yaw from quaternion
+            if (state.targetQuaternion) {
+                const q = state.targetQuaternion;  // [w, x, y, z]
+                // Extract yaw from quaternion (rotation around Z/Down axis in NED)
+                const yaw = Math.atan2(2 * (q[0] * q[3] + q[1] * q[2]), 1 - 2 * (q[2] * q[2] + q[3] * q[3]));
+                document.getElementById('val-tag-yaw').textContent = (yaw * 180 / Math.PI).toFixed(1) + '\u00B0';
+            } else {
+                document.getElementById('val-tag-yaw').textContent = '--';
+            }
 
             document.getElementById('val-target').textContent = state.targetNum;
 
@@ -616,6 +649,12 @@
                     state.position.x = state.distance * Math.tan(state.angleY);  // Forward
                     state.position.y = state.distance * Math.tan(state.angleX);  // Right
                     state.position.z = state.distance;  // Down (distance to target)
+                }
+
+                // Store target orientation quaternion if available
+                if (msg.q && msg.q.length === 4) {
+                    state.targetQuaternion = msg.q;  // [w, x, y, z]
+                    updateLandingTargetOrientation();
                 }
 
                 lastUpdate = Date.now();
