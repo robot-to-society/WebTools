@@ -11,7 +11,7 @@ npm install
 
 ## 実行
 
-### デフォルト設定（172.20.10.4:14570）
+### デフォルト設定（127.0.0.1:14570）
 
 ```bash
 npm start
@@ -25,7 +25,7 @@ node server.js <MAVLink IP> <MAVLink Port> <HTTP Port>
 
 例:
 ```bash
-node server.js 172.20.10.4 14570 8080
+node server.js 127.0.0.1 14570 8080
 ```
 
 ## ブラウザでアクセス
