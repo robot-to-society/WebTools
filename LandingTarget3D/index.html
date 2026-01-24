@@ -450,23 +450,36 @@
             scene.add(offsetLine);
         }
 
-        function convertNEDToThreeJS(x, y, z) {
-            // NED to Three.js: X->-Z, Y->X, Z->-Y
+        function convertBodyFRDToThreeJS(x, y, z) {
+            // Body FRD (Forward-Right-Down) to Three.js (Right-Up-Towards camera)
+            // Body X (forward) -> Three.js -Z (into screen)
+            // Body Y (right)   -> Three.js X (right)
+            // Body Z (down)    -> Three.js -Y (down, but Three.js Y is up)
             return { x: y, y: -z, z: -x };
         }
 
         function updateVehicle() {
             if (!vehicle) return;
 
-            // Position
-            const pos = convertNEDToThreeJS(state.position.x, state.position.y, state.position.z);
+            // Position: LANDING_TARGET x,y,z is in Body FRD frame
+            // This represents the target position relative to the vehicle
+            // We want to show vehicle position relative to the target, so negate
+            const pos = convertBodyFRDToThreeJS(
+                -state.position.x,
+                -state.position.y,
+                -state.position.z
+            );
             vehicle.position.set(pos.x, pos.y, pos.z);
 
-            // Rotation
+            // Rotation: Convert from aerospace (roll-pitch-yaw around X-Y-Z body axes)
+            // to Three.js rotation. The vehicle model has its nose pointing -Z.
+            // Roll: rotation around body X (forward) -> Three.js -Z axis
+            // Pitch: rotation around body Y (right) -> Three.js X axis
+            // Yaw: rotation around body Z (down) -> Three.js -Y axis
             vehicle.rotation.set(
-                state.attitude.pitch,
-                -state.attitude.yaw,
-                -state.attitude.roll,
+                -state.attitude.pitch,  // Pitch around X
+                state.attitude.yaw,     // Yaw around Y (negated because Y is up in Three.js)
+                state.attitude.roll,    // Roll around Z
                 'YXZ'
             );
 
