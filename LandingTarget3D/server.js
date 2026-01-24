@@ -133,7 +133,7 @@ const mavlinkParser = {
         const msg = {
             _id: 149,
             _name: 'LANDING_TARGET',
-            time_usec: payload.readBigUInt64LE(0),
+            time_usec: Number(payload.readBigUInt64LE(0)),
             target_num: payload.readUInt8(8),
             frame: payload.readUInt8(9),
             angle_x: payload.readFloatLE(10),
