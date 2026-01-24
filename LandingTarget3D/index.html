@@ -164,6 +164,7 @@
             <div class="row"><span class="label">Z:</span><span class="value" id="val-z">--</span></div>
             <div class="row"><span class="label">Angle X:</span><span class="value" id="val-angle-x">--</span></div>
             <div class="row"><span class="label">Angle Y:</span><span class="value" id="val-angle-y">--</span></div>
+            <div class="row"><span class="label">H Offset:</span><span class="value" id="val-hoffset">--</span></div>
             <div class="row"><span class="label">Target #:</span><span class="value" id="val-target">--</span></div>
             <div class="status-line" id="data-status">NO DATA</div>
         </div>
@@ -212,7 +213,7 @@
 
         // State
         let scene, camera, renderer, controls;
-        let landingTarget, vehicle, grid, altitudeLine, trail;
+        let landingTarget, vehicle, grid, altitudeLine, trail, offsetLine;
         let trailPoints = [];
         let lastUpdate = 0;
         let ws = null;
@@ -275,6 +276,7 @@
             createGrid();
             createAltitudeLine();
             createTrail();
+            createOffsetLine();
 
             // Event listeners
             window.addEventListener('resize', onResize);
@@ -330,6 +332,31 @@
             crossV.rotation.x = -Math.PI / 2;
             crossV.position.y = 0.002;
             group.add(crossV);
+
+            // Direction arrow (pointing +X in NED = -Z in Three.js)
+            const arrowLength = size * 0.4;
+            const arrowWidth = size * 0.08;
+            const arrowMaterial = new THREE.MeshBasicMaterial({ color: 0x00aaff, side: THREE.DoubleSide });
+
+            // Arrow shaft
+            const shaftGeometry = new THREE.PlaneGeometry(arrowLength * 0.6, arrowWidth * 0.5);
+            const shaft = new THREE.Mesh(shaftGeometry, arrowMaterial);
+            shaft.rotation.x = -Math.PI / 2;
+            shaft.position.set(0, 0.003, -size/2 - arrowLength * 0.3);
+            group.add(shaft);
+
+            // Arrow head (triangle)
+            const headGeometry = new THREE.BufferGeometry();
+            const headVertices = new Float32Array([
+                0, 0, -size/2 - arrowLength,           // tip
+                -arrowWidth, 0, -size/2 - arrowLength * 0.5,  // left
+                arrowWidth, 0, -size/2 - arrowLength * 0.5    // right
+            ]);
+            headGeometry.setAttribute('position', new THREE.BufferAttribute(headVertices, 3));
+            headGeometry.computeVertexNormals();
+            const head = new THREE.Mesh(headGeometry, arrowMaterial);
+            head.position.y = 0.003;
+            group.add(head);
 
             landingTarget = group;
             scene.add(landingTarget);
@@ -411,6 +438,18 @@
             scene.add(trail);
         }
 
+        function createOffsetLine() {
+            // Line from vehicle ground projection to target center (shows horizontal offset)
+            const material = new THREE.LineBasicMaterial({
+                color: 0xff00ff,  // Magenta
+                linewidth: 2
+            });
+            const points = [new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, 0)];
+            const geometry = new THREE.BufferGeometry().setFromPoints(points);
+            offsetLine = new THREE.Line(geometry, material);
+            scene.add(offsetLine);
+        }
+
         function convertNEDToThreeJS(x, y, z) {
             // NED to Three.js: X->-Z, Y->X, Z->-Y
             return { x: y, y: -z, z: -x };
@@ -451,6 +490,15 @@
                     trail.geometry.setFromPoints(trailPoints);
                 }
             }
+
+            // Offset line (from vehicle ground projection to target center)
+            if (offsetLine) {
+                const points = [
+                    new THREE.Vector3(pos.x, 0.01, pos.z),  // Vehicle ground projection
+                    new THREE.Vector3(0, 0.01, 0)            // Target center
+                ];
+                offsetLine.geometry.setFromPoints(points);
+            }
         }
 
         function updateUI() {
@@ -463,6 +511,11 @@
             document.getElementById('val-z').textContent = state.position.z.toFixed(2) + ' m';
             document.getElementById('val-angle-x').textContent = (state.angleX * 180 / Math.PI).toFixed(1) + '\u00B0 (' + state.angleX.toFixed(3) + ' rad)';
             document.getElementById('val-angle-y').textContent = (state.angleY * 180 / Math.PI).toFixed(1) + '\u00B0 (' + state.angleY.toFixed(3) + ' rad)';
+
+            // Horizontal offset (distance from vehicle ground projection to target center)
+            const hOffset = Math.sqrt(state.position.x * state.position.x + state.position.y * state.position.y);
+            document.getElementById('val-hoffset').textContent = hOffset.toFixed(2) + ' m';
+
             document.getElementById('val-target').textContent = state.targetNum;
 
             const statusEl = document.getElementById('data-status');
