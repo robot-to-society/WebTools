@@ -461,8 +461,8 @@
             document.getElementById('val-x').textContent = state.position.x.toFixed(2) + ' m';
             document.getElementById('val-y').textContent = state.position.y.toFixed(2) + ' m';
             document.getElementById('val-z').textContent = state.position.z.toFixed(2) + ' m';
-            document.getElementById('val-angle-x').textContent = (state.angleX * 180 / Math.PI).toFixed(1) + '\u00B0';
-            document.getElementById('val-angle-y').textContent = (state.angleY * 180 / Math.PI).toFixed(1) + '\u00B0';
+            document.getElementById('val-angle-x').textContent = (state.angleX * 180 / Math.PI).toFixed(1) + '\u00B0 (' + state.angleX.toFixed(3) + ' rad)';
+            document.getElementById('val-angle-y').textContent = (state.angleY * 180 / Math.PI).toFixed(1) + '\u00B0 (' + state.angleY.toFixed(3) + ' rad)';
             document.getElementById('val-target').textContent = state.targetNum;
 
             const statusEl = document.getElementById('data-status');
@@ -527,6 +527,7 @@
                 state.attitude.roll = msg.roll || 0;
                 state.attitude.pitch = msg.pitch || 0;
                 state.attitude.yaw = msg.yaw || 0;
+                updateVehicle();
             }
         }
 
