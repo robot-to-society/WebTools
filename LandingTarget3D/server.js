@@ -128,28 +128,46 @@ const mavlinkParser = {
     },
 
     parseLandingTarget(payload) {
+        // MAVLink LANDING_TARGET format: <QfffffBBfff4fBB (60 bytes total)
+        // Byte layout (wire order, large types first for alignment):
+        //   0-7:   time_usec (uint64)
+        //   8-11:  angle_x (float)
+        //  12-15:  angle_y (float)
+        //  16-19:  distance (float)
+        //  20-23:  size_x (float)
+        //  24-27:  size_y (float)
+        //  28:     target_num (uint8)
+        //  29:     frame (uint8)
+        //  30-33:  x (float)
+        //  34-37:  y (float)
+        //  38-41:  z (float)
+        //  42-57:  q[4] (4x float, quaternion)
+        //  58:     type (uint8)
+        //  59:     position_valid (uint8)
+
         if (payload.length < 30) return null;
 
         const msg = {
             _id: 149,
             _name: 'LANDING_TARGET',
             time_usec: Number(payload.readBigUInt64LE(0)),
-            target_num: payload.readUInt8(8),
-            frame: payload.readUInt8(9),
-            angle_x: payload.readFloatLE(10),
-            angle_y: payload.readFloatLE(14),
-            distance: payload.readFloatLE(18),
-            size_x: payload.readFloatLE(22),
-            size_y: payload.readFloatLE(26)
+            angle_x: payload.readFloatLE(8),
+            angle_y: payload.readFloatLE(12),
+            distance: payload.readFloatLE(16),
+            size_x: payload.readFloatLE(20),
+            size_y: payload.readFloatLE(24),
+            target_num: payload.readUInt8(28),
+            frame: payload.readUInt8(29)
         };
 
-        // Extended fields (if available)
+        // Extended fields (x, y, z position)
         if (payload.length >= 42) {
             msg.x = payload.readFloatLE(30);
             msg.y = payload.readFloatLE(34);
             msg.z = payload.readFloatLE(38);
         }
 
+        // Quaternion (w, x, y, z)
         if (payload.length >= 58) {
             msg.q = [
                 payload.readFloatLE(42),
@@ -159,10 +177,12 @@ const mavlinkParser = {
             ];
         }
 
+        // Type field
         if (payload.length >= 59) {
             msg.type = payload.readUInt8(58);
         }
 
+        // Position valid flag
         if (payload.length >= 60) {
             msg.position_valid = payload.readUInt8(59);
         }
