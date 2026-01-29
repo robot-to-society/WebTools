@@ -166,6 +166,7 @@
             <div class="row"><span class="label">Angle Y:</span><span class="value" id="val-angle-y">--</span></div>
             <div class="row"><span class="label">H Offset:</span><span class="value" id="val-hoffset">--</span></div>
             <div class="row"><span class="label">Tag Yaw:</span><span class="value" id="val-tag-yaw">--</span></div>
+            <div class="row"><span class="label">Rel Yaw:</span><span class="value" id="val-rel-yaw">--</span></div>
             <div class="row"><span class="label">Target #:</span><span class="value" id="val-target">--</span></div>
             <div class="status-line" id="data-status">NO DATA</div>
         </div>
@@ -227,7 +228,10 @@
             angleX: 0,
             angleY: 0,
             targetNum: 0,
-            targetQuaternion: null  // [w, x, y, z] from LANDING_TARGET
+            targetQuaternion: null,  // [w, x, y, z] from LANDING_TARGET
+            tagYaw: 0,               // Tag yaw angle in NED frame (radians)
+            relativeYaw: 0,          // Vehicle yaw relative to tag (radians)
+            tagLocalPosition: { x: 0, y: 0, z: 0 }  // Vehicle position in tag-local frame
         };
 
         const options = {
@@ -550,33 +554,99 @@
             return { n: north, e: east, d: down };
         }
 
+        // Phase 1: Extract yaw angle from quaternion
+        // Quaternion is [w, x, y, z] in NED frame
+        // Yaw is rotation around Down (Z) axis
+        function quaternionToYaw(q) {
+            if (!q || q.length !== 4) return 0;
+            // Validate all elements are finite numbers
+            const w = q[0], x = q[1], y = q[2], z = q[3];
+            if (!Number.isFinite(w) || !Number.isFinite(x) ||
+                !Number.isFinite(y) || !Number.isFinite(z)) {
+                return 0;
+            }
+            // q = [w, x, y, z]
+            // yaw = atan2(2*(w*z + x*y), 1 - 2*(y*y + z*z))
+            const yaw = Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z));
+            // Return 0 if result is NaN (defensive)
+            return Number.isFinite(yaw) ? yaw : 0;
+        }
+
+        // Phase 2: Calculate relative yaw (vehicle yaw - tag yaw)
+        // Both angles in NED frame (radians)
+        // Result: positive = vehicle nose is rotated clockwise from tag forward direction
+        function calculateRelativeYaw(vehicleYaw, tagYaw) {
+            // Use atan2-based normalization to avoid while-loop with extreme values
+            const diff = vehicleYaw - tagYaw;
+            // Normalize to [-PI, PI] using atan2(sin, cos) which handles all cases in O(1)
+            return Math.atan2(Math.sin(diff), Math.cos(diff));
+        }
+
+        // Phase 3: Convert NED position to Tag-Local frame
+        // Tag-Local frame: X = tag forward, Y = tag right, Z = down
+        // This rotates NED position by -tagYaw around Z axis
+        function nedToTagLocal(north, east, down, tagYaw) {
+            const cosYaw = Math.cos(-tagYaw);  // Rotate by -tagYaw to align with tag
+            const sinYaw = Math.sin(-tagYaw);
+
+            return {
+                x: north * cosYaw - east * sinYaw,  // Tag forward
+                y: north * sinYaw + east * cosYaw,  // Tag right
+                z: down                              // Down (unchanged)
+            };
+        }
+
+        // Phase 4: Convert Body FRD directly to Tag-Local frame
+        // This is the full pipeline: Body FRD -> NED -> Tag-Local
+        function bodyFRDToTagLocal(bodyX, bodyY, bodyZ, vehicleYaw, tagYaw) {
+            // Step 1: Body FRD to NED
+            const ned = bodyFRDToNED(bodyX, bodyY, bodyZ, vehicleYaw);
+            // Step 2: NED to Tag-Local
+            return nedToTagLocal(ned.n, ned.e, ned.d, tagYaw);
+        }
+
         function updateVehicle() {
             if (!vehicle) return;
 
-            // Position: LANDING_TARGET x,y,z is target position relative to vehicle in Body FRD
+            // Phase 5: Position using Tag-Local coordinate system
+            // LANDING_TARGET x,y,z is target position relative to vehicle in Body FRD
             // We need vehicle position relative to target, so negate
-            // Then convert from Body FRD to NED using current yaw
-            const nedPos = bodyFRDToNED(
+            // Then convert from Body FRD to Tag-Local using vehicle yaw and tag yaw
+            const tagLocal = bodyFRDToTagLocal(
                 -state.position.x,
                 -state.position.y,
                 -state.position.z,
-                state.attitude.yaw
+                state.attitude.yaw,
+                state.tagYaw
             );
 
-            const pos = convertNEDToThreeJS(nedPos.n, nedPos.e, nedPos.d);
+            // Store tag-local position for UI display
+            state.tagLocalPosition = tagLocal;
+
+            // Calculate relative yaw for display and visualization
+            state.relativeYaw = calculateRelativeYaw(state.attitude.yaw, state.tagYaw);
+
+            // Convert Tag-Local to Three.js coordinates
+            // Tag-Local: X=forward, Y=right, Z=down
+            // Three.js: X=right(East), Y=up, Z=-forward(North)
+            // When tag is at origin pointing North (tagYaw=0):
+            //   Tag-Local X (tag forward) = NED North = Three.js -Z
+            //   Tag-Local Y (tag right) = NED East = Three.js +X
+            //   Tag-Local Z (down) = NED Down = Three.js -Y
+            const pos = {
+                x: tagLocal.y,    // Tag right -> Three.js X
+                y: -tagLocal.z,   // Tag down -> Three.js -Y (up)
+                z: -tagLocal.x    // Tag forward -> Three.js -Z
+            };
             vehicle.position.set(pos.x, pos.y, pos.z);
 
-            // Rotation: ATTITUDE gives roll, pitch, yaw in NED frame
-            // Three.js vehicle model: nose points -Z, up is +Y, right is +X
-            // NED: roll around North (X), pitch around East (Y), yaw around Down (Z)
-            // Mapping to Three.js:
-            //   Roll (around NED X/North) -> around Three.js -Z
-            //   Pitch (around NED Y/East) -> around Three.js X
-            //   Yaw (around NED Z/Down) -> around Three.js -Y
+            // Phase 6: Rotation using relative yaw
+            // The vehicle's yaw in Three.js should be relative to the tag's orientation
+            // Since the tag is fixed at origin pointing -Z (North), we use relative yaw
             vehicle.rotation.set(
-                state.attitude.pitch,   // Pitch around Three.js X (= NED East)
-                -state.attitude.yaw,    // Yaw around Three.js Y (= -NED Down)
-                -state.attitude.roll,   // Roll around Three.js Z (= -NED North)
+                state.attitude.pitch,    // Pitch around Three.js X (= Tag right)
+                -state.relativeYaw,      // Yaw around Three.js Y (= -Down), use relative yaw
+                -state.attitude.roll,    // Roll around Three.js Z (= -Tag forward)
                 'YXZ'
             );
 
@@ -612,24 +682,15 @@
         }
 
         function updateLandingTargetOrientation() {
-            if (!landingTarget || !state.targetQuaternion) return;
+            // Phase 5: Tag is always fixed at origin, pointing in the default direction
+            // In the tag-local coordinate system, the tag is always at (0,0,0) with no rotation
+            // The tag's arrow points in -Z direction (Three.js), which represents "tag forward"
+            if (!landingTarget) return;
 
-            // LANDING_TARGET quaternion is [w, x, y, z] in NED frame
-            // Three.js Quaternion constructor is (x, y, z, w)
-            const q = state.targetQuaternion;
-
-            // Convert NED quaternion to Three.js
-            // NED: X=North, Y=East, Z=Down
-            // Three.js: X=Right(East), Y=Up(-Down), Z=-North
-            // This requires axis remapping: NED(x,y,z) -> Three.js(y,-z,-x)
-            const threeQuat = new THREE.Quaternion(
-                q[2],   // NED Y (East) -> Three.js X
-                -q[3],  // NED Z (Down) -> Three.js -Y (Up)
-                -q[1],  // NED X (North) -> Three.js -Z
-                q[0]    // W stays the same
-            );
-
-            landingTarget.quaternion.copy(threeQuat);
+            // Reset landing target to default orientation (no rotation)
+            // The tag is the reference frame, so it never rotates in the visualization
+            landingTarget.position.set(0, 0, 0);
+            landingTarget.rotation.set(0, 0, 0);
         }
 
         function updateUI() {
@@ -647,15 +708,11 @@
             const hOffset = Math.sqrt(state.position.x * state.position.x + state.position.y * state.position.y);
             document.getElementById('val-hoffset').textContent = hOffset.toFixed(2) + ' m';
 
-            // Target yaw from quaternion
-            if (state.targetQuaternion) {
-                const q = state.targetQuaternion;  // [w, x, y, z]
-                // Extract yaw from quaternion (rotation around Z/Down axis in NED)
-                const yaw = Math.atan2(2 * (q[0] * q[3] + q[1] * q[2]), 1 - 2 * (q[2] * q[2] + q[3] * q[3]));
-                document.getElementById('val-tag-yaw').textContent = (yaw * 180 / Math.PI).toFixed(1) + '\u00B0';
-            } else {
-                document.getElementById('val-tag-yaw').textContent = '--';
-            }
+            // Tag yaw from state (extracted when quaternion is received)
+            document.getElementById('val-tag-yaw').textContent = (state.tagYaw * 180 / Math.PI).toFixed(1) + '\u00B0';
+
+            // Relative yaw (vehicle yaw relative to tag)
+            document.getElementById('val-rel-yaw').textContent = (state.relativeYaw * 180 / Math.PI).toFixed(1) + '\u00B0';
 
             document.getElementById('val-target').textContent = state.targetNum;
 
@@ -670,7 +727,9 @@
         function connectWebSocket() {
             const statusEl = document.getElementById('connection-status');
 
-            ws = new WebSocket(`ws://${location.host}`);
+            // Use secure WebSocket (wss) when page is served over HTTPS
+            const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(`${wsProtocol}//${location.host}`);
 
             ws.onopen = () => {
                 console.log('WebSocket connected');
@@ -726,9 +785,13 @@
                     state.position.z = state.distance;  // Down (distance to target)
                 }
 
-                // Store target orientation quaternion if available
-                if (msg.q && msg.q.length === 4) {
+                // Store target orientation quaternion and extract yaw if available
+                // Validate quaternion: must be array of 4 finite numbers
+                if (msg.q && Array.isArray(msg.q) && msg.q.length === 4 &&
+                    msg.q.every(v => typeof v === 'number' && Number.isFinite(v))) {
                     state.targetQuaternion = msg.q;  // [w, x, y, z]
+                    // Extract tag yaw from quaternion for coordinate transformation
+                    state.tagYaw = quaternionToYaw(msg.q);
                     updateLandingTargetOrientation();
                 }
 
@@ -755,11 +818,19 @@
             });
 
             document.getElementById('trail-length').addEventListener('change', (e) => {
-                options.trailLength = parseInt(e.target.value) || 50;
+                // Enforce min/max bounds (10-500) to prevent resource exhaustion
+                const value = parseInt(e.target.value) || 50;
+                options.trailLength = Math.max(10, Math.min(500, value));
+                // Update input to reflect clamped value
+                e.target.value = options.trailLength;
             });
 
             document.getElementById('target-size').addEventListener('change', (e) => {
-                options.targetSize = parseFloat(e.target.value) || 0.5;
+                // Enforce min/max bounds (0.1-2.0) to prevent rendering issues
+                const value = parseFloat(e.target.value) || 0.5;
+                options.targetSize = Math.max(0.1, Math.min(2, value));
+                // Update input to reflect clamped value
+                e.target.value = options.targetSize;
                 if (landingTarget) {
                     scene.remove(landingTarget);
                     createLandingTarget();
@@ -780,6 +851,151 @@
             renderer.render(scene, camera);
             updateUI();
         }
+
+        // Test functions for TDD verification (accessible from browser console)
+        // Usage: runTests() in browser console
+        window.runTests = function() {
+            console.log('=== Running Tag-Local Coordinate System Tests ===\n');
+            let passed = 0, failed = 0;
+
+            function test(name, condition, expected, actual) {
+                if (condition) {
+                    console.log(`PASS: ${name}`);
+                    passed++;
+                } else {
+                    console.error(`FAIL: ${name}`);
+                    console.error(`  Expected: ${expected}`);
+                    console.error(`  Actual: ${actual}`);
+                    failed++;
+                }
+            }
+
+            function approxEqual(a, b, epsilon = 0.0001) {
+                return Math.abs(a - b) < epsilon;
+            }
+
+            // Test 1: quaternionToYaw
+            console.log('\n--- quaternionToYaw Tests ---');
+            // Identity quaternion [1, 0, 0, 0] = 0 yaw
+            test('quaternionToYaw: identity = 0',
+                approxEqual(quaternionToYaw([1, 0, 0, 0]), 0),
+                0, quaternionToYaw([1, 0, 0, 0]));
+
+            // 90 deg yaw: q = [cos(45deg), 0, 0, sin(45deg)] = [0.707, 0, 0, 0.707]
+            const q90 = [Math.cos(Math.PI/4), 0, 0, Math.sin(Math.PI/4)];
+            test('quaternionToYaw: 90 deg',
+                approxEqual(quaternionToYaw(q90), Math.PI/2),
+                Math.PI/2, quaternionToYaw(q90));
+
+            // -90 deg yaw
+            const qNeg90 = [Math.cos(-Math.PI/4), 0, 0, Math.sin(-Math.PI/4)];
+            test('quaternionToYaw: -90 deg',
+                approxEqual(quaternionToYaw(qNeg90), -Math.PI/2),
+                -Math.PI/2, quaternionToYaw(qNeg90));
+
+            // Edge cases: NaN and invalid input handling
+            test('quaternionToYaw: null input returns 0',
+                quaternionToYaw(null) === 0,
+                0, quaternionToYaw(null));
+
+            test('quaternionToYaw: undefined input returns 0',
+                quaternionToYaw(undefined) === 0,
+                0, quaternionToYaw(undefined));
+
+            test('quaternionToYaw: wrong length array returns 0',
+                quaternionToYaw([1, 0, 0]) === 0,
+                0, quaternionToYaw([1, 0, 0]));
+
+            test('quaternionToYaw: NaN in array returns 0',
+                quaternionToYaw([NaN, 0, 0, 0]) === 0,
+                0, quaternionToYaw([NaN, 0, 0, 0]));
+
+            test('quaternionToYaw: Infinity in array returns 0',
+                quaternionToYaw([1, Infinity, 0, 0]) === 0,
+                0, quaternionToYaw([1, Infinity, 0, 0]));
+
+            test('quaternionToYaw: -Infinity in array returns 0',
+                quaternionToYaw([1, 0, -Infinity, 0]) === 0,
+                0, quaternionToYaw([1, 0, -Infinity, 0]));
+
+            // Test 2: calculateRelativeYaw
+            console.log('\n--- calculateRelativeYaw Tests ---');
+            // Tag yaw = 0, vehicle yaw = 90 deg -> relative = 90 deg
+            test('relativeYaw: tag=0, vehicle=90 deg -> 90 deg',
+                approxEqual(calculateRelativeYaw(Math.PI/2, 0), Math.PI/2),
+                Math.PI/2, calculateRelativeYaw(Math.PI/2, 0));
+
+            // Tag yaw = 90 deg, vehicle yaw = 0 -> relative = -90 deg
+            test('relativeYaw: tag=90, vehicle=0 deg -> -90 deg',
+                approxEqual(calculateRelativeYaw(0, Math.PI/2), -Math.PI/2),
+                -Math.PI/2, calculateRelativeYaw(0, Math.PI/2));
+
+            // Tag yaw = 45 deg, vehicle yaw = 45 deg -> relative = 0
+            test('relativeYaw: tag=45, vehicle=45 deg -> 0',
+                approxEqual(calculateRelativeYaw(Math.PI/4, Math.PI/4), 0),
+                0, calculateRelativeYaw(Math.PI/4, Math.PI/4));
+
+            // Wrap around test: vehicle = 170 deg, tag = -170 deg -> -20 deg (not 340)
+            test('relativeYaw: wrap around 170 - (-170) -> -20 deg',
+                approxEqual(calculateRelativeYaw(170*Math.PI/180, -170*Math.PI/180), -20*Math.PI/180),
+                -20*Math.PI/180, calculateRelativeYaw(170*Math.PI/180, -170*Math.PI/180));
+
+            // Edge case: extreme values (should not cause infinite loop)
+            const extremeResult = calculateRelativeYaw(1000 * Math.PI, 0);
+            test('relativeYaw: extreme value (1000*PI) normalizes correctly',
+                extremeResult >= -Math.PI && extremeResult <= Math.PI,
+                '[-PI, PI]', extremeResult);
+
+            // Test 3: nedToTagLocal
+            console.log('\n--- nedToTagLocal Tests ---');
+            // When tag yaw = 0, NED = Tag-Local
+            const tl1 = nedToTagLocal(1, 0, 2, 0);
+            test('nedToTagLocal: tagYaw=0, NED=(1,0,2) -> TagLocal=(1,0,2)',
+                approxEqual(tl1.x, 1) && approxEqual(tl1.y, 0) && approxEqual(tl1.z, 2),
+                '(1, 0, 2)', `(${tl1.x.toFixed(4)}, ${tl1.y.toFixed(4)}, ${tl1.z.toFixed(4)})`);
+
+            // When tag yaw = 90 deg (pointing East), North becomes Tag-Left (-Y)
+            const tl2 = nedToTagLocal(1, 0, 2, Math.PI/2);
+            test('nedToTagLocal: tagYaw=90, NED=(1,0,2) -> TagLocal=(0,-1,2)',
+                approxEqual(tl2.x, 0) && approxEqual(tl2.y, -1) && approxEqual(tl2.z, 2),
+                '(0, -1, 2)', `(${tl2.x.toFixed(4)}, ${tl2.y.toFixed(4)}, ${tl2.z.toFixed(4)})`);
+
+            // When tag yaw = 90 deg, East becomes Tag-Forward (+X)
+            const tl3 = nedToTagLocal(0, 1, 2, Math.PI/2);
+            test('nedToTagLocal: tagYaw=90, NED=(0,1,2) -> TagLocal=(1,0,2)',
+                approxEqual(tl3.x, 1) && approxEqual(tl3.y, 0) && approxEqual(tl3.z, 2),
+                '(1, 0, 2)', `(${tl3.x.toFixed(4)}, ${tl3.y.toFixed(4)}, ${tl3.z.toFixed(4)})`);
+
+            // Test 4: bodyFRDToTagLocal
+            console.log('\n--- bodyFRDToTagLocal Tests ---');
+            // Vehicle pointing North (yaw=0), tag pointing North (tagYaw=0)
+            // Body forward = NED North = Tag-Local forward
+            const btl1 = bodyFRDToTagLocal(1, 0, 2, 0, 0);
+            test('bodyFRDToTagLocal: vYaw=0, tYaw=0, FRD=(1,0,2) -> (1,0,2)',
+                approxEqual(btl1.x, 1) && approxEqual(btl1.y, 0) && approxEqual(btl1.z, 2),
+                '(1, 0, 2)', `(${btl1.x.toFixed(4)}, ${btl1.y.toFixed(4)}, ${btl1.z.toFixed(4)})`);
+
+            // Vehicle pointing East (yaw=90), tag pointing North (tagYaw=0)
+            // Body forward (vehicle) = East = Tag-Local right
+            const btl2 = bodyFRDToTagLocal(1, 0, 2, Math.PI/2, 0);
+            test('bodyFRDToTagLocal: vYaw=90, tYaw=0, FRD=(1,0,2) -> (0,1,2)',
+                approxEqual(btl2.x, 0) && approxEqual(btl2.y, 1) && approxEqual(btl2.z, 2),
+                '(0, 1, 2)', `(${btl2.x.toFixed(4)}, ${btl2.y.toFixed(4)}, ${btl2.z.toFixed(4)})`);
+
+            // Vehicle pointing East (yaw=90), tag pointing East (tagYaw=90)
+            // Body forward = East = Tag-Local forward
+            const btl3 = bodyFRDToTagLocal(1, 0, 2, Math.PI/2, Math.PI/2);
+            test('bodyFRDToTagLocal: vYaw=90, tYaw=90, FRD=(1,0,2) -> (1,0,2)',
+                approxEqual(btl3.x, 1) && approxEqual(btl3.y, 0) && approxEqual(btl3.z, 2),
+                '(1, 0, 2)', `(${btl3.x.toFixed(4)}, ${btl3.y.toFixed(4)}, ${btl3.z.toFixed(4)})`);
+
+            console.log(`\n=== Test Results: ${passed} passed, ${failed} failed ===`);
+            return { passed, failed };
+        };
+
+        // Expose functions for debugging
+        window.debugState = () => state;
+        window.simulateMessage = (msg) => handleMessage(msg);
 
         // Start
         init();
