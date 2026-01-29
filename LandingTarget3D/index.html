@@ -230,7 +230,7 @@
             targetNum: 0,
             targetQuaternion: null,  // [w, x, y, z] from LANDING_TARGET
             bodyTagYaw: 0,           // Tag yaw in body frame (MAV_FRAME_BODY_FRD) from LANDING_TARGET.q
-            relativeYaw: 0,          // Vehicle yaw relative to tag (= -bodyTagYaw)
+            relativeYaw: 0,          // Vehicle yaw relative to tag (= +bodyTagYaw)
             tagLocalPosition: { x: 0, y: 0, z: 0 }  // Vehicle position in tag-local frame
         };
 
@@ -560,12 +560,13 @@
         // Phase 2: Calculate relative yaw from bodyTagYaw
         // bodyTagYaw: tag yaw as seen from vehicle body frame (from LANDING_TARGET.q)
         // Result: vehicle yaw relative to tag, where tag forward = 0 degrees
-        // relativeYaw = -bodyTagYaw because:
+        // relativeYaw = +bodyTagYaw because:
         //   - bodyTagYaw = 0: tag aligned with body forward -> vehicle aligned with tag -> relativeYaw = 0
-        //   - bodyTagYaw = +90: tag pointing body right -> vehicle is 90 deg LEFT of tag -> relativeYaw = -90
+        //   - bodyTagYaw = +90: tag pointing body right -> from tag's view, vehicle nose points tag's right -> relativeYaw = +90
+        // Note: Sign was corrected based on field testing (was -bodyTagYaw, caused 180 deg offset)
         function calculateRelativeYaw(bodyTagYaw) {
             // Normalize to [-PI, PI] using atan2(sin, cos)
-            return Math.atan2(Math.sin(-bodyTagYaw), Math.cos(-bodyTagYaw));
+            return Math.atan2(Math.sin(bodyTagYaw), Math.cos(bodyTagYaw));
         }
 
         // Phase 3: Convert Body FRD position directly to Tag-Local frame
@@ -573,12 +574,13 @@
         // bodyTagYaw: how the tag's forward direction appears in body frame
         //   - bodyTagYaw = 0: tag forward = body forward
         //   - bodyTagYaw = +90: tag forward = body right
-        // To convert body position to tag-local, we rotate by -bodyTagYaw
+        // To convert body position to tag-local, we rotate by +bodyTagYaw
+        // Note: Sign was corrected based on field testing (was -bodyTagYaw, caused 180 deg offset)
         function bodyFRDToTagLocalDirect(bodyX, bodyY, bodyZ, bodyTagYaw) {
-            // Rotate body frame position by -bodyTagYaw to get tag-local position
+            // Rotate body frame position by +bodyTagYaw to get tag-local position
             // This transforms from "as seen from body" to "as seen from tag"
-            const cosYaw = Math.cos(-bodyTagYaw);
-            const sinYaw = Math.sin(-bodyTagYaw);
+            const cosYaw = Math.cos(bodyTagYaw);
+            const sinYaw = Math.sin(bodyTagYaw);
 
             return {
                 x: bodyX * cosYaw - bodyY * sinYaw,  // Tag forward
@@ -605,7 +607,7 @@
             state.tagLocalPosition = tagLocal;
 
             // Calculate relative yaw for display and visualization
-            // relativeYaw = -bodyTagYaw (vehicle heading relative to tag)
+            // relativeYaw = +bodyTagYaw (vehicle heading relative to tag)
             state.relativeYaw = calculateRelativeYaw(state.bodyTagYaw);
 
             // Convert Tag-Local to Three.js coordinates
@@ -902,36 +904,38 @@
                 quaternionToYaw([1, 0, -Infinity, 0]) === 0,
                 0, quaternionToYaw([1, 0, -Infinity, 0]));
 
-            // Test 2: calculateRelativeYaw - NEW BEHAVIOR
-            // relativeYaw = -bodyTagYaw (vehicle yaw relative to tag, where tag is reference 0)
-            console.log('\n--- calculateRelativeYaw Tests (relativeYaw = -bodyTagYaw) ---');
+            // Test 2: calculateRelativeYaw - CORRECTED BEHAVIOR
+            // relativeYaw = +bodyTagYaw (vehicle yaw relative to tag, where tag is reference 0)
+            // Sign corrected based on field testing
+            console.log('\n--- calculateRelativeYaw Tests (relativeYaw = +bodyTagYaw) ---');
 
             // bodyTagYaw = 0 -> vehicle and tag same direction -> relativeYaw = 0
             test('relativeYaw: bodyTagYaw=0 -> relativeYaw=0 (same direction)',
                 approxEqual(calculateRelativeYaw(0), 0),
                 0, calculateRelativeYaw(0));
 
-            // bodyTagYaw = 90 deg -> tag pointing body right -> vehicle is 90 deg LEFT of tag
-            // relativeYaw = -90 deg
-            test('relativeYaw: bodyTagYaw=90 deg -> relativeYaw=-90 deg',
-                approxEqual(calculateRelativeYaw(Math.PI/2), -Math.PI/2),
-                -Math.PI/2, calculateRelativeYaw(Math.PI/2));
-
-            // bodyTagYaw = -90 deg -> tag pointing body left -> vehicle is 90 deg RIGHT of tag
+            // bodyTagYaw = 90 deg -> tag pointing body right -> from tag view, vehicle points right
             // relativeYaw = +90 deg
-            test('relativeYaw: bodyTagYaw=-90 deg -> relativeYaw=+90 deg',
-                approxEqual(calculateRelativeYaw(-Math.PI/2), Math.PI/2),
-                Math.PI/2, calculateRelativeYaw(-Math.PI/2));
+            test('relativeYaw: bodyTagYaw=90 deg -> relativeYaw=+90 deg',
+                approxEqual(calculateRelativeYaw(Math.PI/2), Math.PI/2),
+                Math.PI/2, calculateRelativeYaw(Math.PI/2));
+
+            // bodyTagYaw = -90 deg -> tag pointing body left -> from tag view, vehicle points left
+            // relativeYaw = -90 deg
+            test('relativeYaw: bodyTagYaw=-90 deg -> relativeYaw=-90 deg',
+                approxEqual(calculateRelativeYaw(-Math.PI/2), -Math.PI/2),
+                -Math.PI/2, calculateRelativeYaw(-Math.PI/2));
 
             // bodyTagYaw = 180 deg -> tag pointing backward -> vehicle is 180 deg from tag
-            test('relativeYaw: bodyTagYaw=180 deg -> relativeYaw=-180 deg',
+            test('relativeYaw: bodyTagYaw=180 deg -> relativeYaw=+/-180 deg',
                 approxEqual(Math.abs(calculateRelativeYaw(Math.PI)), Math.PI),
                 '+/- PI', calculateRelativeYaw(Math.PI));
 
-            // Test 3: bodyFRDToTagLocalDirect - NEW FUNCTION
+            // Test 3: bodyFRDToTagLocalDirect - CORRECTED FUNCTION
             // Converts Body FRD position directly to Tag-Local using bodyTagYaw only
             // No ATTITUDE.yaw needed
-            console.log('\n--- bodyFRDToTagLocalDirect Tests ---');
+            // Sign corrected based on field testing (rotation by +bodyTagYaw instead of -bodyTagYaw)
+            console.log('\n--- bodyFRDToTagLocalDirect Tests (corrected sign) ---');
 
             // bodyTagYaw = 0: body and tag aligned, direct mapping
             // Body forward (+X) = Tag forward (+X)
@@ -941,20 +945,22 @@
                 '(1, 0, 2)', `(${btld1.x.toFixed(4)}, ${btld1.y.toFixed(4)}, ${btld1.z.toFixed(4)})`);
 
             // bodyTagYaw = 90 deg: tag pointing body right
-            // Body forward (+X) becomes Tag left (-Y)
-            // Body right (+Y) becomes Tag forward (+X)
-            const btld2 = bodyFRDToTagLocalDirect(1, 0, 2, Math.PI/2);
-            test('bodyFRDToTagLocalDirect: bodyTagYaw=90, (1,0,2) -> (0,-1,2)',
-                approxEqual(btld2.x, 0) && approxEqual(btld2.y, -1) && approxEqual(btld2.z, 2),
-                '(0, -1, 2)', `(${btld2.x.toFixed(4)}, ${btld2.y.toFixed(4)}, ${btld2.z.toFixed(4)})`);
-
-            // bodyTagYaw = -90 deg: tag pointing body left
+            // With +bodyTagYaw rotation:
             // Body forward (+X) becomes Tag right (+Y)
             // Body right (+Y) becomes Tag backward (-X)
+            const btld2 = bodyFRDToTagLocalDirect(1, 0, 2, Math.PI/2);
+            test('bodyFRDToTagLocalDirect: bodyTagYaw=90, (1,0,2) -> (0,1,2)',
+                approxEqual(btld2.x, 0) && approxEqual(btld2.y, 1) && approxEqual(btld2.z, 2),
+                '(0, 1, 2)', `(${btld2.x.toFixed(4)}, ${btld2.y.toFixed(4)}, ${btld2.z.toFixed(4)})`);
+
+            // bodyTagYaw = -90 deg: tag pointing body left
+            // With +bodyTagYaw rotation:
+            // Body forward (+X) becomes Tag left (-Y)
+            // Body right (+Y) becomes Tag forward (+X)
             const btld3 = bodyFRDToTagLocalDirect(1, 0, 2, -Math.PI/2);
-            test('bodyFRDToTagLocalDirect: bodyTagYaw=-90, (1,0,2) -> (0,1,2)',
-                approxEqual(btld3.x, 0) && approxEqual(btld3.y, 1) && approxEqual(btld3.z, 2),
-                '(0, 1, 2)', `(${btld3.x.toFixed(4)}, ${btld3.y.toFixed(4)}, ${btld3.z.toFixed(4)})`);
+            test('bodyFRDToTagLocalDirect: bodyTagYaw=-90, (1,0,2) -> (0,-1,2)',
+                approxEqual(btld3.x, 0) && approxEqual(btld3.y, -1) && approxEqual(btld3.z, 2),
+                '(0, -1, 2)', `(${btld3.x.toFixed(4)}, ${btld3.y.toFixed(4)}, ${btld3.z.toFixed(4)})`);
 
             // bodyTagYaw = 180 deg: tag pointing body backward
             // Body forward (+X) becomes Tag backward (-X)
@@ -963,18 +969,19 @@
                 approxEqual(btld4.x, -1) && approxEqual(btld4.y, 0) && approxEqual(btld4.z, 2),
                 '(-1, 0, 2)', `(${btld4.x.toFixed(4)}, ${btld4.y.toFixed(4)}, ${btld4.z.toFixed(4)})`);
 
-            // Test body right (+Y) direction
+            // Test body right (+Y) direction with bodyTagYaw = 90 deg
+            // Body right (+Y) becomes Tag backward (-X)
             const btld5 = bodyFRDToTagLocalDirect(0, 1, 2, Math.PI/2);
-            test('bodyFRDToTagLocalDirect: bodyTagYaw=90, (0,1,2) -> (1,0,2)',
-                approxEqual(btld5.x, 1) && approxEqual(btld5.y, 0) && approxEqual(btld5.z, 2),
-                '(1, 0, 2)', `(${btld5.x.toFixed(4)}, ${btld5.y.toFixed(4)}, ${btld5.z.toFixed(4)})`);
+            test('bodyFRDToTagLocalDirect: bodyTagYaw=90, (0,1,2) -> (-1,0,2)',
+                approxEqual(btld5.x, -1) && approxEqual(btld5.y, 0) && approxEqual(btld5.z, 2),
+                '(-1, 0, 2)', `(${btld5.x.toFixed(4)}, ${btld5.y.toFixed(4)}, ${btld5.z.toFixed(4)})`);
 
             // Test 4: Integration - position calculation without ATTITUDE.yaw
-            console.log('\n--- Integration Tests (no ATTITUDE.yaw) ---');
+            console.log('\n--- Integration Tests (no ATTITUDE.yaw, corrected) ---');
 
             // Scenario: Tag directly below vehicle, bodyTagYaw = 0
             // LANDING_TARGET.x,y,z = (0, 0, 2) - target 2m below
-            // Vehicle position = negated and rotated = (0, 0, 2) above tag
+            // Vehicle position = negated and rotated = (0, 0, -2) above tag
             const int1 = bodyFRDToTagLocalDirect(-0, -0, -2, 0);
             test('Integration: target below, bodyTagYaw=0 -> vehicle at (0,0,-2)',
                 approxEqual(int1.x, 0) && approxEqual(int1.y, 0) && approxEqual(int1.z, -2),
@@ -988,14 +995,14 @@
                 approxEqual(int2.x, -1) && approxEqual(int2.y, 0) && approxEqual(int2.z, -2),
                 '(-1, 0, -2)', `(${int2.x.toFixed(4)}, ${int2.y.toFixed(4)}, ${int2.z.toFixed(4)})`);
 
-            // Scenario: Target 1m to the right, bodyTagYaw = 90 deg (tag pointing right)
+            // Scenario: Target 1m to the right, bodyTagYaw = 90 deg (tag pointing body right)
             // LANDING_TARGET.y = 1 (target to body right)
-            // In tag frame (rotated -90 from body): body right = tag forward
-            // Vehicle is 1m behind tag in tag frame
+            // With corrected sign: body right rotated by +90 deg = tag backward
+            // Vehicle is 1m in front of tag in tag frame (opposite of target position)
             const int3 = bodyFRDToTagLocalDirect(-0, -1, -2, Math.PI/2);
-            test('Integration: target 1m right, bodyTagYaw=90 -> vehicle at (-1,0,-2)',
-                approxEqual(int3.x, -1) && approxEqual(int3.y, 0) && approxEqual(int3.z, -2),
-                '(-1, 0, -2)', `(${int3.x.toFixed(4)}, ${int3.y.toFixed(4)}, ${int3.z.toFixed(4)})`);
+            test('Integration: target 1m right, bodyTagYaw=90 -> vehicle at (1,0,-2)',
+                approxEqual(int3.x, 1) && approxEqual(int3.y, 0) && approxEqual(int3.z, -2),
+                '(1, 0, -2)', `(${int3.x.toFixed(4)}, ${int3.y.toFixed(4)}, ${int3.z.toFixed(4)})`);
 
             console.log(`\n=== Test Results: ${passed} passed, ${failed} failed ===`);
             return { passed, failed };
