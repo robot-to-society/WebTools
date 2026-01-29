@@ -627,9 +627,15 @@
             // Phase 6: Rotation using relative yaw
             // The vehicle's yaw in Three.js should be relative to the tag's orientation
             // Since the tag is fixed at origin pointing -Z (North), we use relative yaw
+            // Note: relativeYaw is used directly (not negated) because:
+            //   - Body FRD: +yaw = clockwise (CW) when viewed from above
+            //   - Three.js: +rotation.y follows right-hand rule around +Y axis
+            //     - Mathematically CCW, but when viewed from above (looking down -Y), appears as CW
+            //   - Therefore, Body FRD +yaw and Three.js +rotation.y both appear as CW from above
+            //   - Field testing confirmed: negating caused CW rotation to appear as CCW in 3D view
             vehicle.rotation.set(
                 state.attitude.pitch,    // Pitch around Three.js X (= Tag right)
-                -state.relativeYaw,      // Yaw around Three.js Y (= -Down), use relative yaw
+                state.relativeYaw,       // Yaw around Three.js Y - direct mapping, no negation needed
                 -state.attitude.roll,    // Roll around Three.js Z (= -Tag forward)
                 'YXZ'
             );
@@ -1003,6 +1009,58 @@
             test('Integration: target 1m right, bodyTagYaw=90 -> vehicle at (1,0,-2)',
                 approxEqual(int3.x, 1) && approxEqual(int3.y, 0) && approxEqual(int3.z, -2),
                 '(1, 0, -2)', `(${int3.x.toFixed(4)}, ${int3.y.toFixed(4)}, ${int3.z.toFixed(4)})`);
+
+            // Test 5: Vehicle rotation direction (yaw sign convention)
+            // This test verifies the fix for the CW/CCW rotation inversion bug
+            // When vehicle rotates CW (clockwise) in real world, 3D view should also show CW rotation
+            console.log('\n--- Vehicle Rotation Direction Tests (yaw sign fix) ---');
+
+            // Test: relativeYaw is used directly in vehicle.rotation.set() (not negated)
+            // Positive relativeYaw (CW rotation in body frame) should result in CW rotation in 3D view
+            // This is verified by checking that vehicle.rotation.y equals relativeYaw (not -relativeYaw)
+
+            // Save current state
+            const savedRelativeYaw = state.relativeYaw;
+            const savedPosition = { ...state.position };
+            const savedBodyTagYaw = state.bodyTagYaw;
+
+            // Test case: Vehicle rotated 45 deg CW (positive yaw in Body FRD)
+            // bodyTagYaw = +45 deg means tag appears 45 deg CW from body forward
+            // This means vehicle is rotated 45 deg CW relative to tag
+            state.bodyTagYaw = Math.PI / 4;  // 45 deg
+            state.relativeYaw = calculateRelativeYaw(state.bodyTagYaw);
+            state.position = { x: 0, y: 0, z: 2 };
+            updateVehicle();
+
+            // vehicle.rotation.y should be +45 deg
+            // Three.js +rotation.y appears as CW when viewed from above, matching Body FRD convention
+            // Therefore, no sign inversion is needed
+            test('Rotation: CW 45 deg yaw -> vehicle.rotation.y = +45 deg (not negated)',
+                approxEqual(vehicle.rotation.y, Math.PI / 4),
+                Math.PI / 4, vehicle.rotation.y);
+
+            // Test case: Vehicle rotated 90 deg CCW (negative yaw in Body FRD)
+            state.bodyTagYaw = -Math.PI / 2;  // -90 deg
+            state.relativeYaw = calculateRelativeYaw(state.bodyTagYaw);
+            updateVehicle();
+
+            test('Rotation: CCW 90 deg yaw -> vehicle.rotation.y = -90 deg',
+                approxEqual(vehicle.rotation.y, -Math.PI / 2),
+                -Math.PI / 2, vehicle.rotation.y);
+
+            // Test case: Vehicle aligned with tag (0 deg)
+            state.bodyTagYaw = 0;
+            state.relativeYaw = calculateRelativeYaw(state.bodyTagYaw);
+            updateVehicle();
+
+            test('Rotation: 0 deg yaw -> vehicle.rotation.y = 0',
+                approxEqual(vehicle.rotation.y, 0),
+                0, vehicle.rotation.y);
+
+            // Restore state
+            state.relativeYaw = savedRelativeYaw;
+            state.position = savedPosition;
+            state.bodyTagYaw = savedBodyTagYaw;
 
             console.log(`\n=== Test Results: ${passed} passed, ${failed} failed ===`);
             return { passed, failed };
