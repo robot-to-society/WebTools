@@ -1,0 +1,19 @@
+[Unit]
+Description=Landing Target 3D Visualization Server
+After=network.target
+
+[Service]
+Type=simple
+User=rtos
+WorkingDirectory=/home/rtos/github/WebTools/LandingTarget3D
+ExecStart=/home/linuxbrew/.linuxbrew/bin/node server.js
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Environment variables
+Environment="NODE_ENV=production"
+
+[Install]
+WantedBy=multi-user.target
